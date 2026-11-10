@@ -167,7 +167,8 @@ def vibrato(cents: np.ndarray, hop: float) -> dict[str, Any]:
     k = np.flatnonzero(band)[np.argmax(spec[band])]
     rate = float(freqs[k])
     near = (freqs >= rate - 1.0) & (freqs <= rate + 1.0)
-    frac = float(spec[near].sum() / spec[freqs > 0.5].sum()) if spec[freqs > 0.5].sum() > 0 else 0
+    above = float(spec[freqs > 0.5].sum())
+    frac = float(spec[near].sum()) / above if above > 0 else 0.0
     # extent from the band-limited component: sinusoid amplitude = sqrt(2) * rms
     sp = np.fft.rfft(resid, nfft)
     sp[~near] = 0

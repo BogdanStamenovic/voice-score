@@ -87,6 +87,7 @@ class PyinTracker:
 
 class FcpeTracker:
     name = "fcpe"
+    sweep = False  # the benchmark sets this to get a confidence; 12x slower
     GRID = (0.006, 0.02, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8)
 
     def __init__(self) -> None:
@@ -108,9 +109,9 @@ class FcpeTracker:
         # Default contour = FCPE's own default threshold (0.006).
         raw = np.zeros(n)
         conf = np.zeros(n)
-        f0_default = None
+        f0_default: np.ndarray | None = None
         with torch.no_grad():
-            for th in self.GRID:
+            for th in self.GRID if self.sweep else self.GRID[:1]:
                 f0 = self._model.infer(torch.from_numpy(y)[None, :, None], sr=16000,
                                        decoder_mode="local_argmax", threshold=th,
                                        f0_min=FMIN, f0_max=FMAX, interp_uv=False,
@@ -120,6 +121,7 @@ class FcpeTracker:
                     f0_default = f0
                     raw = f0.copy()
                 conf[f0 > 0] = th
+        assert f0_default is not None
         return Contour(np.arange(n) * hop / 16000, np.where(f0_default > 0, f0_default, np.nan),
                        conf, np.where(raw > 0, raw, np.nan), self.GRID[0])
 

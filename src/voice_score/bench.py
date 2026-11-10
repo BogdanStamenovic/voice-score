@@ -78,13 +78,13 @@ def frame_metrics(gt: np.ndarray, est: np.ndarray) -> dict[str, float]:
 
 def synth_suite() -> list[dict[str, Any]]:
     cases: list[dict[str, Any]] = []
-    phrases = {
+    phrases: dict[str, list[tuple[float, float]]] = {
         # A2-E3 (male low), A3-G4 (middle), A4-C6 (high / falsetto / head voice)
         "low": [(45, 0.8), (47, 0.6), (49, 0.6), (52, 1.0), (50, 0.6), (45, 1.0)],
         "mid": [(57, 0.8), (60, 0.6), (64, 0.6), (62, 0.6), (67, 1.2), (65, 0.8)],
         "high": [(69, 0.8), (72, 0.6), (76, 0.6), (79, 0.8), (84, 1.0), (81, 0.8)],
     }
-    styles = {
+    styles: dict[str, dict[str, Any]] = {
         "plain": {},
         "vibrato": {"vibrato_hz": 5.8, "vibrato_cents": 50},
         "scoop_jitter": {"scoop_cents": -120, "jitter_cents": 8},
@@ -218,6 +218,8 @@ def run(names: list[str], datasets: list[str], out: Path | None) -> dict[str, An
         except trackers.TrackerUnavailable as exc:
             print(f"bench: {exc}", file=sys.stderr)
             continue
+        if hasattr(tr, "sweep"):
+            tr.sweep = True  # FCPE: derive a confidence from its threshold grid
         tr.track(np.zeros(SR, dtype=np.float32) + 1e-4, SR)  # warm-up (graph init, JIT)
         per_group: dict[str, list[dict[str, float]]] = {}
         notes_err: dict[str, list[float]] = {}
