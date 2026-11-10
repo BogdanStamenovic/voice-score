@@ -1,0 +1,18 @@
+schema: 1
+name: voice-score
+description: Analyze a singing recording (f0 contour, cents error against target notes, stability, sustain, range, vibrato) over a local HTTP API on 127.0.0.1:3311.
+homepage: https://github.com/BogdanStamenovic/voice-score
+tags: [singing, pitch, audio, service, python]
+install:
+  platforms: [linux]
+  setup:
+    linux:
+      - bash scripts/lifecycle.sh setup
+  update:
+    linux:
+      - bash scripts/lifecycle.sh update
+  remove:
+    linux:
+      - bash scripts/lifecycle.sh remove
+command:
+  linux: .venv/bin/voice-score

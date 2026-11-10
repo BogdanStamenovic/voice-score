@@ -1,0 +1,238 @@
+"""Head-to-head pitch tracker benchmark on identical inputs.
+
+Datasets:
+  synth     synthetic voice with exactly known f0 (vibrato, scoops, jitter, breath,
+            white noise at several SNRs, range A2..C6)
+  vocadito  40 solo singing excerpts with annotated f0 (CC BY 4.0, zenodo 5578807),
+            clean and with added pink noise at 10 dB SNR
+
+Frame metrics (on ground-truth frames, est resampled to the GT grid):
+  RPA   raw pitch accuracy: GT-voiced frames whose estimate is voiced and within 50 cents
+  RCA   same, ignoring octave errors
+  VR    voicing recall, VFA voicing false alarm
+  MAE   median |cents| on frames voiced in both
+  P95   95th percentile |cents| on frames voiced in both
+Note metric (vocadito): per annotated note, |median est cents - median GT cents| over the
+note's frames; this is the error a tracker adds to the grade the trainer shows.
+Speed: real-time factor on this CPU (seconds of compute per second of audio).
+"""
+
+from __future__ import annotations
+
+import csv
+import json
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+from . import trackers
+from .synth import SR, note_sequence, render
+
+VOCADITO = Path("/mnt/windows/voice-score-data/dl/vocadito")
+
+
+def _cents(hz: np.ndarray) -> np.ndarray:
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return 1200 * np.log2(hz / 10.0)
+
+
+def resample_to(c: trackers.Contour, t_ref: np.ndarray) -> np.ndarray:
+    """Estimated f0 (Hz, NaN unvoiced) at reference times; nearest frame for voicing,
+    linear in cents between voiced neighbours."""
+    if len(c.t) == 0:
+        return np.full(len(t_ref), np.nan)
+    idx = np.clip(np.searchsorted(c.t, t_ref), 1, len(c.t) - 1)
+    left, right = idx - 1, idx
+    nearest = np.where(np.abs(c.t[left] - t_ref) <= np.abs(c.t[right] - t_ref), left, right)
+    cents = _cents(c.f0)
+    a, b = cents[left], cents[right]
+    w = np.clip((t_ref - c.t[left]) / np.maximum(c.t[right] - c.t[left], 1e-9), 0, 1)
+    interp = np.where(np.isfinite(a) & np.isfinite(b), a + w * (b - a), cents[nearest])
+    out = np.where(np.isfinite(cents[nearest]), 10 * 2 ** (interp / 1200), np.nan)
+    out[(t_ref < c.t[0] - 0.05) | (t_ref > c.t[-1] + 0.05)] = np.nan
+    return out
+
+
+def frame_metrics(gt: np.ndarray, est: np.ndarray) -> dict[str, float]:
+    gv = gt > 0
+    ev = np.isfinite(est)
+    both = gv & ev
+    err = _cents(est[both]) - _cents(gt[both])
+    chroma = np.abs((err + 600) % 1200 - 600)
+    n_gv = max(int(gv.sum()), 1)
+    return {
+        "frames": int(gv.sum()),
+        "RPA": float(np.sum(np.abs(err) <= 50) / n_gv),
+        "RCA": float(np.sum(chroma <= 50) / n_gv),
+        "VR": float(both.sum() / n_gv),
+        "VFA": float(np.sum(ev & ~gv) / max(int((~gv).sum()), 1)),
+        "MAE": float(np.median(np.abs(err))) if err.size else float("nan"),
+        "P95": float(np.percentile(np.abs(err), 95)) if err.size else float("nan"),
+    }
+
+
+def synth_suite() -> list[dict[str, Any]]:
+    cases: list[dict[str, Any]] = []
+    phrases = {
+        "low": [(45, 0.8), (47, 0.6), (49, 0.6), (52, 1.0), (50, 0.6), (45, 1.0)],
+        "mid": [(57, 0.8), (60, 0.6), (64, 0.6), (62, 0.6), (67, 1.2), (65, 0.8)],
+        "high": [(69, 0.8), (72, 0.6), (76, 0.6), (79, 0.8), (84, 1.0), (81, 0.8)],
+    }
+    styles = {
+        "plain": {},
+        "vibrato": {"vibrato_hz": 5.8, "vibrato_cents": 50},
+        "scoop_jitter": {"scoop_cents": -120, "jitter_cents": 8},
+    }
+    noises: dict[str, dict[str, Any]] = {
+        "clean": {}, "snr20": {"noise_snr_db": 20}, "snr10": {"noise_snr_db": 10},
+        "snr5": {"noise_snr_db": 5}, "breathy": {"breath": 0.15, "noise_snr_db": 20},
+    }
+    seed = 0
+    for pname, notes in phrases.items():
+        for sname, style in styles.items():
+            f0 = note_sequence(notes, gap_s=0.12, seed=seed, **style)
+            for nname, noise in noises.items():
+                s = render(f0, seed=seed, **noise)
+                cases.append({"name": f"{pname}/{sname}/{nname}", "group": nname,
+                              "audio": s.audio, "sr": s.sr, "t": s.t, "f0": s.f0})
+                seed += 1
+    return cases
+
+
+def _pink(n: int, rng: np.random.Generator) -> np.ndarray:
+    spec = np.fft.rfft(rng.standard_normal(n))
+    f = np.fft.rfftfreq(n)
+    f[0] = f[1]
+    return np.fft.irfft(spec / np.sqrt(f), n)
+
+
+def vocadito_suite(noisy_snr: float | None = 10.0) -> list[dict[str, Any]]:
+    import soundfile as sf
+
+    if not (VOCADITO / "Audio").is_dir():
+        print(f"bench: vocadito not found at {VOCADITO}; skipping", file=sys.stderr)
+        return []
+    rng = np.random.default_rng(0)
+    cases = []
+    for wav in sorted((VOCADITO / "Audio").glob("vocadito_*.wav"),
+                      key=lambda p: int(p.stem.split("_")[1])):
+        tid = wav.stem
+        gt = np.loadtxt(VOCADITO / "Annotations/F0" / f"{tid}_f0.csv", delimiter=",")
+        notes_path = VOCADITO / "Annotations/Notes" / f"{tid}_notesA1.csv"
+        notes = np.loadtxt(notes_path, delimiter=",", ndmin=2) if notes_path.exists() else None
+        audio, sr = sf.read(wav, dtype="float32", always_2d=False)
+        if audio.ndim == 2:
+            audio = audio.mean(axis=1)
+        base = {"t": gt[:, 0], "f0": gt[:, 1], "sr": sr, "notes": notes}
+        cases.append({"name": f"{tid}/clean", "group": "vocadito-clean", "audio": audio, **base})
+        if noisy_snr is not None:
+            p = float(np.mean(audio[np.abs(audio) > 0.01] ** 2)) if np.any(np.abs(audio) > 0.01) \
+                else float(np.mean(audio ** 2))
+            noise = _pink(len(audio), rng)
+            noise *= np.sqrt(p / 10 ** (noisy_snr / 10) / np.mean(noise ** 2))
+            cases.append({"name": f"{tid}/pink{noisy_snr:g}", "group": f"vocadito-pink{noisy_snr:g}",
+                          "audio": (audio + noise).astype(np.float32), **base})
+    return cases
+
+
+def note_errors(case: dict[str, Any], est: np.ndarray) -> list[float]:
+    notes = case.get("notes")
+    if notes is None:
+        return []
+    t, gt = case["t"], case["f0"]
+    out = []
+    for start, _pitch, dur in notes:
+        m = (t >= start + 0.05) & (t < start + dur - 0.05) & (gt > 0)
+        if m.sum() < 5:
+            continue
+        g = np.median(_cents(gt[m]))
+        e = est[m]
+        e = e[np.isfinite(e)]
+        out.append(float(abs(np.median(_cents(e)) - g)) if e.size >= 3 else float("inf"))
+    return out
+
+
+def run(names: list[str], datasets: list[str], out: Path | None) -> dict[str, Any]:
+    cases: list[dict[str, Any]] = []
+    if "synth" in datasets:
+        cases += synth_suite()
+    if "vocadito" in datasets:
+        cases += vocadito_suite()
+    results: dict[str, Any] = {"cases": len(cases), "trackers": {}}
+    for name in names:
+        try:
+            tr = trackers.get(name)
+        except trackers.TrackerUnavailable as exc:
+            print(f"bench: {exc}", file=sys.stderr)
+            continue
+        tr.track(np.zeros(SR, dtype=np.float32) + 1e-4, SR)  # warm-up (graph init, JIT)
+        per_group: dict[str, list[dict[str, float]]] = {}
+        notes_err: dict[str, list[float]] = {}
+        compute = audio_s = 0.0
+        for case in cases:
+            t0 = time.perf_counter()
+            c = tr.track(case["audio"], case["sr"])
+            compute += time.perf_counter() - t0
+            audio_s += len(case["audio"]) / case["sr"]
+            est = resample_to(c, case["t"])
+            per_group.setdefault(case["group"], []).append(frame_metrics(case["f0"], est))
+            notes_err.setdefault(case["group"], []).extend(note_errors(case, est))
+        groups = {}
+        for g, rows in per_group.items():
+            w = np.array([r["frames"] for r in rows], dtype=float)
+            agg = {k: float(np.nansum([r[k] * wi for r, wi in zip(rows, w)]) / w.sum())
+                   for k in ("RPA", "RCA", "VR", "VFA")}
+            agg["MAE"] = float(np.nanmedian([r["MAE"] for r in rows]))
+            agg["P95"] = float(np.nanmedian([r["P95"] for r in rows]))
+            ne = np.array(notes_err.get(g, []))
+            if ne.size:
+                agg["notes"] = int(ne.size)
+                agg["note_mae"] = float(np.median(ne[np.isfinite(ne)]))
+                agg["note_within_10c"] = float(np.mean(ne <= 10))
+                agg["note_within_25c"] = float(np.mean(ne <= 25))
+            groups[g] = agg
+        results["trackers"][name] = {"rtf": compute / audio_s, "audio_s": audio_s,
+                                     "groups": groups}
+        print(f"bench: {name} done, RTF {compute / audio_s:.4f}", file=sys.stderr)
+    if out:
+        out.write_text(json.dumps(results, indent=2))
+    return results
+
+
+def markdown(results: dict[str, Any]) -> str:
+    lines = []
+    groups = sorted({g for r in results["trackers"].values() for g in r["groups"]})
+    lines.append("| tracker | RTF | " + " | ".join(f"{g} RPA" for g in groups) + " |")
+    lines.append("|---|---:|" + "---:|" * len(groups))
+    for name, r in results["trackers"].items():
+        cells = [f"{r['groups'][g]['RPA']:.3f}" if g in r["groups"] else "-" for g in groups]
+        lines.append(f"| {name} | {r['rtf']:.4f} | " + " | ".join(cells) + " |")
+    lines.append("")
+    lines.append("| tracker | group | RPA | RCA | VR | VFA | MAE c | P95 c | note MAE c | notes <=10c | notes <=25c |")
+    lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    for name, r in results["trackers"].items():
+        for g in groups:
+            a = r["groups"].get(g)
+            if not a:
+                continue
+            nm = (f"{a['note_mae']:.1f} | {a['note_within_10c']:.3f} | {a['note_within_25c']:.3f}"
+                  if "note_mae" in a else "- | - | -")
+            lines.append(f"| {name} | {g} | {a['RPA']:.3f} | {a['RCA']:.3f} | {a['VR']:.3f} | "
+                         f"{a['VFA']:.3f} | {a['MAE']:.1f} | {a['P95']:.1f} | {nm} |")
+    return "\n".join(lines)
+
+
+def write_csv(results: dict[str, Any], path: Path) -> None:
+    with path.open("w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["tracker", "group", "RPA", "RCA", "VR", "VFA", "MAE", "P95", "note_mae",
+                    "note_within_10c", "note_within_25c", "rtf"])
+        for name, r in results["trackers"].items():
+            for g, a in r["groups"].items():
+                w.writerow([name, g] + [round(a.get(k, float("nan")), 4) for k in
+                                        ("RPA", "RCA", "VR", "VFA", "MAE", "P95", "note_mae",
+                                         "note_within_10c", "note_within_25c")]
+                           + [round(r["rtf"], 5)])
