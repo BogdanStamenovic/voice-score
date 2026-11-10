@@ -1,0 +1,14 @@
+{
+  "name": "voice-score-lite",
+  "version": "0.1.0",
+  "description": "In-browser fallback for voice-score: SwiftF0 on onnxruntime-web plus the same singing metrics as the Python service.",
+  "type": "module",
+  "main": "voice-score-lite.mjs",
+  "files": ["voice-score-lite.mjs", "swift-f0.onnx", "LICENSE-swift-f0"],
+  "license": "MIT",
+  "author": "Bogdan Stamenovic",
+  "repository": "github:BogdanStamenovic/voice-score",
+  "peerDependencies": { "onnxruntime-web": ">=1.19" },
+  "devDependencies": { "onnxruntime-node": "^1.20.0" },
+  "scripts": { "test": "node test/parity.mjs" }
+}
