@@ -125,3 +125,12 @@ def test_nothing_voiced() -> None:
 
     with pytest.raises(NothingVoiced):
         analyze(contour(np.zeros(200)), [], Options())
+
+
+def test_short_beats_fast_tempo() -> None:
+    # 16th notes at 200 bpm = 75 ms windows, shorter than the 0.25 s smoothing kernel
+    seq = [tone(60 + 2 * (i % 2), 0.075) for i in range(8)]
+    f = np.concatenate([np.zeros(20), *seq, np.zeros(20)])
+    tg = parse_targets([{"midi": 60 + 2 * (i % 2), "beats": 0.25} for i in range(8)])
+    r = analyze(contour(f), tg, Options(tempo_bpm=200))
+    assert len(r["notes"]) == 8

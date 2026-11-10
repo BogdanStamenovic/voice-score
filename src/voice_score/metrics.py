@@ -183,7 +183,9 @@ SMOOTH_S = 0.25  # longer than one vibrato cycle (vibrato is 4-8 Hz, i.e. 125-25
 
 def smooth(x: np.ndarray, hop: float, win_s: float = SMOOTH_S) -> np.ndarray:
     """NaN-aware centered moving average. Removes vibrato and jitter, keeps wander and drift."""
-    w = max(1, int(round(win_s / hop)) if hop > 0 else 1)
+    # np.convolve(mode="same") returns max(len(x), w) samples, so the kernel must not be
+    # longer than the input (short beats at fast tempi produce windows of a few frames).
+    w = min(max(1, int(round(win_s / hop)) if hop > 0 else 1), max(1, len(x)))
     ok = np.isfinite(x)
     k = np.ones(w)
     num = np.convolve(np.where(ok, x, 0.0), k, "same")
