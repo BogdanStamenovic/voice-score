@@ -17,7 +17,9 @@ import numpy as np
 
 FMIN = 50.0
 FMAX = 2000.0
-THRESHOLD_RMVPE = 0.03  # RVC default
+# RVC uses 0.03, which voices 32% of unvoiced frames on vocadito. 0.69 was tuned for overall
+# accuracy on odd vocadito tracks: held-out OA 0.881 -> 0.944 (bench/results, 2026-11-10).
+THRESHOLD_RMVPE = 0.69
 
 
 @dataclass

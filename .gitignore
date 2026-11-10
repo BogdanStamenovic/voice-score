@@ -8,3 +8,5 @@ dist/
 build/
 *.egg-info/
 bench/results/*.raw.json
+bench/results/**/*.log
+bench/results/*.log

@@ -1,0 +1,11 @@
+tracker,group,RPA,RCA,VR,VFA,MAE,P95,note_mae,note_within_10c,note_within_25c,rtf
+fcpe,synth-breathy,1.0,1.0,1.0,0.2559,1.273,4.2506,nan,nan,nan,0.191
+fcpe,synth-clean,1.0,1.0,1.0,0.1759,0.8662,4.2491,nan,nan,nan,0.191
+fcpe,synth-high,1.0,1.0,1.0,0.3172,1.9509,7.0032,nan,nan,nan,0.191
+fcpe,synth-low,0.9996,0.9996,1.0,0.4126,1.2287,3.8236,nan,nan,nan,0.191
+fcpe,synth-mid,1.0,1.0,1.0,0.2051,1.2603,3.9968,nan,nan,nan,0.191
+fcpe,synth-snr10,0.9995,0.9995,1.0,0.3746,1.4955,4.0011,nan,nan,nan,0.191
+fcpe,synth-snr20,1.0,1.0,1.0,0.298,1.0969,3.6049,nan,nan,nan,0.191
+fcpe,synth-snr5,0.9998,0.9998,1.0,0.4537,1.7427,5.8582,nan,nan,nan,0.191
+fcpe,vocadito-clean,0.9889,0.9897,0.9994,0.3277,3.2939,22.9742,2.0307,0.9345,0.9883,0.191
+fcpe,vocadito-pink10,0.9814,0.9834,0.9973,0.5672,3.5047,24.0147,2.0628,0.9364,0.989,0.191
