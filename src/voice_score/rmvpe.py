@@ -102,7 +102,7 @@ def load_rmvpe(path: Path | None = None) -> Callable[[np.ndarray], tuple[np.ndar
             mel = np.pad(mel, ((0, 0), (0, 0), (0, n_pad)))
         hidden = sess.run([out_name], {in_name: mel})[0]
         hidden = np.asarray(hidden).reshape(-1, hidden.shape[-1])[:n]
-        f0, peak = decode(hidden)
+        f0, peak = decode(hidden, threshold=-1.0)  # raw pitch everywhere; caller thresholds
         return np.arange(n) * HOP / SR, f0, peak
 
     return run

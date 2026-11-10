@@ -17,13 +17,16 @@ import numpy as np
 
 FMIN = 50.0
 FMAX = 2000.0
+THRESHOLD_RMVPE = 0.03  # RVC default
 
 
 @dataclass
 class Contour:
     t: np.ndarray  # frame times, seconds
     f0: np.ndarray  # Hz, NaN where unvoiced
-    confidence: np.ndarray  # 0..1, tracker-specific meaning
+    confidence: np.ndarray  # tracker-specific voicing score; voiced = confidence >= threshold
+    raw_f0: np.ndarray | None = None  # best pitch guess for every frame (for threshold sweeps)
+    threshold: float = 0.5
 
     @property
     def hop(self) -> float:
@@ -59,7 +62,7 @@ class SwiftF0Tracker:
     def track(self, x: np.ndarray, sr: int) -> Contour:
         r = self._det.detect(x, sr, fmin=FMIN, fmax=FMAX)
         f0 = np.where(r.confidence >= 0.5, r.pitch_hz, np.nan)
-        return Contour(r.timestamps, f0, r.confidence)
+        return Contour(r.timestamps, f0, r.confidence, r.pitch_hz, 0.5)
 
 
 class PyinTracker:
@@ -73,15 +76,18 @@ class PyinTracker:
 
         y = _resample(x, sr, 16000)
         hop = 256
-        f0, flag, prob = librosa.pyin(y, fmin=FMIN, fmax=FMAX, sr=16000, frame_length=2048,
-                                      hop_length=hop, center=True)
-        t = np.arange(len(f0)) * hop / 16000
-        f0 = np.where(flag, f0, np.nan)
-        return Contour(t, f0, np.nan_to_num(prob))
+        raw, flag, prob = librosa.pyin(y, fmin=FMIN, fmax=FMAX, sr=16000, frame_length=2048,
+                                       hop_length=hop, center=True, fill_na=None)
+        t = np.arange(len(raw)) * hop / 16000
+        # pYIN's voicing comes from its HMM (flag), not from thresholding prob; the default
+        # contour keeps that decision, the sweep thresholds prob instead.
+        f0 = np.where(flag, raw, np.nan)
+        return Contour(t, f0, np.nan_to_num(prob), raw, 0.5)
 
 
 class FcpeTracker:
     name = "fcpe"
+    GRID = (0.006, 0.02, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8)
 
     def __init__(self) -> None:
         import torch
@@ -97,14 +103,25 @@ class FcpeTracker:
         y = _resample(x, sr, 16000)
         hop = 160
         n = len(y) // hop + 1
+        # FCPE exposes no confidence, only a mask threshold on its salience peak. Run it at a
+        # grid of thresholds; a frame's confidence is the highest threshold it survives.
+        # Default contour = FCPE's own default threshold (0.006).
+        raw = np.zeros(n)
+        conf = np.zeros(n)
+        f0_default = None
         with torch.no_grad():
-            f0 = self._model.infer(torch.from_numpy(y)[None, :, None], sr=16000,
-                                   decoder_mode="local_argmax", threshold=0.006,
-                                   f0_min=FMIN, f0_max=FMAX, interp_uv=False,
-                                   output_interp_target_length=n)
-        f0 = f0.squeeze().cpu().numpy().astype(np.float64)
-        conf = (f0 > 0).astype(np.float64)
-        return Contour(np.arange(n) * hop / 16000, np.where(f0 > 0, f0, np.nan), conf)
+            for th in self.GRID:
+                f0 = self._model.infer(torch.from_numpy(y)[None, :, None], sr=16000,
+                                       decoder_mode="local_argmax", threshold=th,
+                                       f0_min=FMIN, f0_max=FMAX, interp_uv=False,
+                                       output_interp_target_length=n)
+                f0 = f0.squeeze().cpu().numpy().astype(np.float64)
+                if f0_default is None:
+                    f0_default = f0
+                    raw = f0.copy()
+                conf[f0 > 0] = th
+        return Contour(np.arange(n) * hop / 16000, np.where(f0_default > 0, f0_default, np.nan),
+                       conf, np.where(raw > 0, raw, np.nan), self.GRID[0])
 
 
 class PestoTracker:
@@ -130,7 +147,7 @@ class PestoTracker:
         conf = conf.cpu().numpy().astype(np.float64)
         # PESTO has no voicing decision; 0.5 on its confidence is the convention its
         # README uses for display. Benchmarked as-is.
-        return Contour(t, np.where(conf >= 0.5, f0, np.nan), conf)
+        return Contour(t, np.where(conf >= 0.5, f0, np.nan), conf, f0, 0.5)
 
 
 class RmvpeTracker:
@@ -143,8 +160,9 @@ class RmvpeTracker:
 
     def track(self, x: np.ndarray, sr: int) -> Contour:
         y = _resample(x, sr, 16000)
-        t, f0, conf = self._model(y)
-        return Contour(t, np.where(f0 > 0, f0, np.nan), conf)
+        t, raw, conf = self._model(y)
+        f0 = np.where(conf > THRESHOLD_RMVPE, raw, np.nan)
+        return Contour(t, f0, conf, raw, THRESHOLD_RMVPE)
 
 
 FACTORIES: dict[str, Callable[[], object]] = {
