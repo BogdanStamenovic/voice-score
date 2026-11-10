@@ -43,6 +43,26 @@ def cases() -> list[tuple[str, np.ndarray, dict]]:
     out.append(("rest", render(f, formants=False).audio,
                 {"targets": [{"note": "C4", "beats": 1.6}, {"rest": True, "beats": 1},
                              {"note": "E4", "beats": 1.6}], "tempo_bpm": 120}))
+    # V-006 glides with tempo drift / long last note / wrong top note (exercises the tempo fit)
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "bench"))
+    from glides import rendition
+
+    for name, sung, kw in [
+        ("glide151_slow", [55, 62, 55], {"tempo_scale": 1.25}),
+        ("glide151_longlast", [55, 62, 55], {"tempo_scale": 0.85, "last_mult": 2.0}),
+        ("glide151_wrongtop", [55, 60, 55], {"tempo_scale": 1.1}),
+    ]:
+        f = rendition([float(m) for m in sung], [2, 2, 2], glide_s=0.5, place=0.5,
+                      detune=[10.0, -20.0, 5.0], vibrato=True, seed=1, **kw)
+        out.append((name, render(f, noise_snr_db=25, formants=False).audio,
+                    {"targets": [{"midi": m, "beats": 2} for m in (55, 62, 55)], "tempo_bpm": 60,
+                     "pass_cents": 100}))
+    f = rendition([55.0, 59.0, 62.0, 59.0, 55.0], [1.5, 1.5, 2, 1.5, 2], glide_s=0.3, place=0.0,
+                  detune=[0.0] * 5, vibrato=False, seed=2, tempo_scale=0.8)
+    out.append(("glide13531_fast", render(f, formants=False).audio,
+                {"targets": [{"midi": m, "beats": b} for m, b in
+                             zip((55, 59, 62, 59, 55), (1.5, 1.5, 2, 1.5, 2))], "tempo_bpm": 60,
+                 "pass_cents": 100}))
     # real singing: first 12 s of three vocadito tracks, untargeted and with their notes
     import soxr
 

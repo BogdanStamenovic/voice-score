@@ -1,6 +1,6 @@
 {
   "name": "voice-score-lite",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "In-browser fallback for voice-score: SwiftF0 on onnxruntime-web plus the same singing metrics as the Python service.",
   "type": "module",
   "main": "voice-score-lite.mjs",

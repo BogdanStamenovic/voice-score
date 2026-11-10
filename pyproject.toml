@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "voice-score"
-version = "0.1.0"
+version = "0.2.0"
 description = "Analyze a singing recording: f0 contour, cents error against target notes, stability, sustain, range and vibrato, over a local HTTP API."
 readme = "README.md"
 requires-python = ">=3.10"

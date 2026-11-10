@@ -6,9 +6,9 @@ SwiftF0 model (`swift-f0.onnx`, 135 KB) on onnxruntime-web, and a line-for-line 
 
 ## What parity means here
 
-`test/parity.mjs` checks, on 16 fixtures (7 synthetic, 9 real-singing excerpts from vocadito):
+`test/parity.mjs` checks, on 20 fixtures (11 synthetic incl. 4 V-006 glides with tempo drift, 9 real-singing excerpts from vocadito):
 
-| Check | Result (2026-11-10) |
+| Check | Result (web-v0.2.0, 2026-11-10) |
 |---|---|
 | Metrics on the Python contour (every field of `notes` and `summary`) | identical within rounding (tolerance 0.11 on 1-decimal fields) |
 | SwiftF0 contour, onnxruntime-node vs Python onnxruntime, same 16 kHz PCM | voicing agreement 1.0000, max pitch difference 0.000 cents |
@@ -24,9 +24,9 @@ slightly from the server's for the same upload.
 Vendor a pinned copy from a tag, never `main`:
 
 ```bash
-git -C ~/data/voice-score show web-v0.1.0:web/voice-score-lite.mjs > vendor/voice-score-lite.mjs
-git -C ~/data/voice-score show web-v0.1.0:web/swift-f0.onnx > public/voice-score/swift-f0.onnx
-# or https://raw.githubusercontent.com/BogdanStamenovic/voice-score/web-v0.1.0/web/voice-score-lite.mjs
+git -C ~/data/voice-score show web-v0.2.0:web/voice-score-lite.mjs > vendor/voice-score-lite.mjs
+git -C ~/data/voice-score show web-v0.2.0:web/swift-f0.onnx > public/voice-score/swift-f0.onnx
+# or https://raw.githubusercontent.com/BogdanStamenovic/voice-score/web-v0.2.0/web/voice-score-lite.mjs
 ```
 
 ```js

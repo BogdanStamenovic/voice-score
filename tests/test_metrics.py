@@ -134,3 +134,39 @@ def test_short_beats_fast_tempo() -> None:
     tg = parse_targets([{"midi": 60 + 2 * (i % 2), "beats": 0.25} for i in range(8)])
     r = analyze(contour(f), tg, Options(tempo_bpm=200))
     assert len(r["notes"]) == 8
+
+
+def _glide_phrase(midis: list[int], beats: list[float], spb: float, last_mult: float = 1.0,
+                  glide_s: float = 0.4, cents: float = 0.0) -> np.ndarray:
+    durs = [b * spb for b in beats]
+    durs[-1] *= last_mult
+    bounds = np.concatenate([[0.0], np.cumsum(durs)])
+    t = np.arange(int(bounds[-1] * 100)) / 100
+    p = np.array([midis[np.searchsorted(bounds, x, side="right") - 1] for x in t], float)
+    for k in range(1, len(midis)):
+        sel = (t >= bounds[k] - glide_s / 2) & (t < bounds[k] + glide_s / 2)
+        u = (t[sel] - bounds[k] + glide_s / 2) / glide_s
+        p[sel] = midis[k - 1] + (midis[k] - midis[k - 1]) * (1 - np.cos(np.pi * u)) / 2
+    f0 = 440 * 2 ** ((p + cents / 100 - 69) / 12)
+    return np.concatenate([np.zeros(40), f0, np.zeros(40)])
+
+
+@pytest.mark.parametrize("tempo_scale", [0.8, 1.0, 1.25])
+@pytest.mark.parametrize("last_mult", [1.0, 2.0])
+def test_glide_phrase_with_tempo_drift(tempo_scale: float, last_mult: float) -> None:
+    # V-006-5: G3 B3 D4 B3 G3, beats 1.5 1.5 2 1.5 2 at 60 bpm, sung 15 c sharp
+    midis, beats = [55, 59, 62, 59, 55], [1.5, 1.5, 2, 1.5, 2]
+    f = _glide_phrase(midis, beats, tempo_scale, last_mult, cents=15)
+    tg = parse_targets([{"midi": m, "beats": b} for m, b in zip(midis, beats)])
+    r = analyze(contour(f), tg, Options(tempo_bpm=60, pass_cents=100))
+    assert [n["cents_error"] for n in r["notes"]] == pytest.approx([15] * 5, abs=8)
+    assert r["summary"]["tempo_ratio"] == pytest.approx(tempo_scale, abs=0.1)
+
+
+def test_glide_wrong_top_note_is_not_fitted_away() -> None:
+    midis, beats = [55, 62, 55], [2, 2, 2]
+    sung = [55, 60, 55]  # fourth instead of fifth
+    f = _glide_phrase(sung, beats, 1.1)
+    r = analyze(contour(f), parse_targets([{"midi": m, "beats": b} for m, b in zip(midis, beats)]),
+                Options(tempo_bpm=60, pass_cents=100))
+    assert r["notes"][1]["cents_error"] == pytest.approx(-200, abs=10)

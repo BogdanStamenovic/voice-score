@@ -3,7 +3,7 @@
 // Runs the same SwiftF0 ONNX model (135 KB, MIT, github.com/lars76/swift-f0) through
 // onnxruntime-web and computes the same metrics as voice_score/metrics.py, so a grade
 // computed here matches the server's for the same contour (checked by test/parity.mjs).
-// Port of voice_score 0.1.0; keep the two in lockstep (VERSION below).
+// Port of voice_score 0.2.0; keep the two in lockstep (VERSION below).
 //
 // The caller supplies onnxruntime (`import * as ort from "onnxruntime-web"`) so this file
 // has no dependencies and can be vendored as-is.
@@ -14,7 +14,7 @@
 //
 // `result` has the same shape as POST /analyze on the server, minus server-only fields.
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.2.0";
 
 const SR = 16000;
 const HOP = 256;
@@ -358,7 +358,7 @@ function noteMetrics(c, i0, i1, targetMidi, opt) {
   if (nVoiced * hop < 0.05) {
     return Object.assign(out, {
       sung_note: null, cents_error: null, abs_cents_mean: null, within_50c: null, within_25c: null,
-      stability_cents_sd: null, raw_cents_sd: null, drift_cents: null, sustain_s: 0.0, onset_s: null,
+      stability_cents_sd: null, raw_cents_sd: null, drift_cents: null, sustain_s: 0.0, landed_ratio: 0.0, onset_s: null,
       octave_offset: null, vibrato: vibrato([], hop), pass: targetMidi !== null ? false : null, missing: true,
     });
   }
@@ -395,6 +395,7 @@ function noteMetrics(c, i0, i1, targetMidi, opt) {
     raw_cents_sd: r(std(cents)),
     drift_cents: r((median(smSteady.slice(-third)) - median(smSteady.slice(0, third))) * 100),
     sustain_s: r(longestRun(inTol, hop), 2),
+    landed_ratio: r(longestRun(inTol, hop) / Math.max((i1 - i0) * hop, hop), 3),
     octave_offset: hasT ? octave : null,
     vibrato: vibrato(cents, hop),
     pass: hasT ? Math.abs(err) <= opt.pass_cents : null,
@@ -455,6 +456,51 @@ function align(segMidis, segDurs, targets, octaveAgnostic) {
   return groups;
 }
 
+// Global tempo factor (sung beat / written beat) that best lines the sung pitch up with the
+// target layout; mirrors metrics._fit_tempo (grid 0.6..1.6 step 0.02, per-window mean of
+// min(|cents|, 300) with unvoiced = 300, windows weigh equally, +10*|ln s| prior).
+function fitTempo(c, targets, spb, t0, opt) {
+  const hop = c.hop || 0.01;
+  const m = interpMidi(c, opt.a4_hz);
+  const n = m.length;
+  let best = Infinity;
+  let bestS = 1.0;
+  for (let k = 0; k <= 50; k++) {
+    const s = 0.6 + k * 0.02;
+    let t = t0;
+    const costs = [];
+    for (const tg of targets) {
+      const dur = (tg.beats !== null ? tg.beats : 1) * spb * s;
+      if (!tg.rest && tg.midi !== null) {
+        const i0 = pyRound(t / hop);
+        const i1 = Math.min(n, pyRound((t + dur) / hop));
+        let sum = 0;
+        let cnt = 0;
+        if (i1 > i0) {
+          for (let i = i0; i < i1; i++) {
+            let d = (m[i] - tg.midi) * 100;
+            if (opt.octave_agnostic) d -= 1200 * pyRound(d / 1200);
+            sum += Number.isFinite(d) ? Math.min(Math.abs(d), 300) : 300;
+            cnt++;
+          }
+        } else {
+          sum = 300;
+          cnt = 1;
+        }
+        costs.push(sum / cnt);
+      }
+      t += dur;
+    }
+    if (!costs.length) return 1.0;
+    const cost = mean(costs) + 10 * Math.abs(Math.log(s));
+    if (cost < best) {
+      best = cost;
+      bestS = s;
+    }
+  }
+  return bestS;
+}
+
 /** Metrics from a contour {t: number[], f0: number[] (NaN = unvoiced)}. Mirrors metrics.analyze. */
 export function analyzeContour(contour, targets, opt) {
   const c = { t: contour.t, f0: contour.f0.map((f) => (f === null || !(f > 0) ? NaN : f)) };
@@ -470,6 +516,7 @@ export function analyzeContour(contour, targets, opt) {
   const emit = (idx, tg, i0, i1) =>
     notes.push({ index: idx, target_note: tg.name, target_midi: tg.midi, ...noteMetrics(c, i0, i1, tg.midi, opt) });
   const sung = targets.filter((t) => !t.rest);
+  let tempoRatio = null;
   if (!targets.length) {
     noteSegs.forEach(([s, e], idx) =>
       notes.push({ index: idx, target_note: null, target_midi: null, ...noteMetrics(c, s, e, null, opt) }));
@@ -481,8 +528,10 @@ export function analyzeContour(contour, targets, opt) {
     });
   } else if (targets.some((t) => t.beats !== null)) {
     if (!opt.tempo_bpm) throw new VoiceScoreError("targets use 'beats' but tempo_bpm is missing");
-    const spb = 60 / opt.tempo_bpm;
+    let spb = 60 / opt.tempo_bpm;
     let t = tFirst;
+    tempoRatio = fitTempo(c, targets, spb, tFirst, opt);
+    spb *= tempoRatio;
     targets.forEach((tg, idx) => {
       const dur = (tg.beats !== null ? tg.beats : 1) * spb;
       if (!tg.rest) emit(idx, tg, frame(t), frame(t + dur));
@@ -515,6 +564,7 @@ export function analyzeContour(contour, targets, opt) {
     voiced_s: r(voicedS, 2),
     range: rangeOf(c, noteSegs, opt.a4_hz),
     notes_targeted: sung.length,
+    tempo_ratio: r(tempoRatio, 2),
     notes_passed: notes.filter((n) => n.pass).length,
     mean_abs_cents: graded.length ? r(mean(graded.map((n) => Math.abs(n.cents_error)))) : null,
     stability_cents_sd: stab.length ? r(median(stab)) : null,

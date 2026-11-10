@@ -267,7 +267,7 @@ def note_metrics(c: Contour, i0: int, i1: int, target_midi: float | None,
     if voiced.sum() * hop < 0.05:
         out.update({"sung_note": None, "cents_error": None, "abs_cents_mean": None,
                     "within_50c": None, "within_25c": None, "stability_cents_sd": None, "raw_cents_sd": None,
-                    "drift_cents": None, "sustain_s": 0.0, "onset_s": None, "octave_offset": None,
+                    "drift_cents": None, "sustain_s": 0.0, "landed_ratio": 0.0, "onset_s": None, "octave_offset": None,
                     "vibrato": vibrato(np.array([]), hop), "pass": False if target_midi is not None else None,
                     "missing": True})
         return out
@@ -304,6 +304,8 @@ def note_metrics(c: Contour, i0: int, i1: int, target_midi: float | None,
         "raw_cents_sd": _r(float(np.std(cents))),
         "drift_cents": _r(float((np.median(sm_steady[-third:]) - np.median(sm_steady[:third])) * 100)),
         "sustain_s": _r(_longest_run(in_tol, hop), 2),
+        # longest in-tolerance stretch as a share of the note window: "did it land and stay"
+        "landed_ratio": _r(_longest_run(in_tol, hop) / max((i1 - i0) * hop, hop), 3),
         "octave_offset": octave if target_midi is not None else None,
         "vibrato": vibrato(cents, hop),
         "pass": (abs(err) <= opt.pass_cents) if target_midi is not None else None,
@@ -368,9 +370,60 @@ def _align(seg_midis: list[float], seg_durs: list[float], targets: list[int],
     return groups
 
 
+def _fit_tempo(c: Contour, targets: list[Target], spb: float, t0: float, opt: Options) -> float:
+    """Global tempo factor (singer's beat / written beat) that best lines the sung pitch up with
+    the target layout. Per window cost = mean over its frames of min(|cents to target|, 300),
+    unvoiced frames 300; windows weigh equally. One global factor cannot make a wrongly pitched
+    note look right: the correctly sung notes pin the timing."""
+    hop = c.hop or 0.01
+    m = _interp_midi(c, opt.a4_hz)
+    n = len(m)
+    best, best_s = float("inf"), 1.0
+    for s in np.arange(0.6, 1.6001, 0.02):
+        t, costs = t0, []
+        for tg in targets:
+            dur = (tg.beats if tg.beats is not None else 1.0) * spb * s
+            if not tg.rest and tg.midi is not None:
+                i0, i1 = int(round(t / hop)), min(n, int(round((t + dur) / hop)))
+                seg = m[i0:i1] if i1 > i0 else np.array([np.nan])
+                d = (seg - tg.midi) * 100
+                if opt.octave_agnostic:
+                    d = d - 1200 * np.round(d / 1200)
+                costs.append(float(np.mean(np.where(np.isfinite(d), np.minimum(np.abs(d), 300), 300))))
+            t += dur
+        if not costs:
+            return 1.0
+        cost = float(np.mean(costs)) + 10 * abs(np.log(s))  # mild preference for written tempo
+        if cost < best:
+            best, best_s = cost, float(s)
+    return best_s
+
+
+def _align_untimed(c: Contour, targets: list[Target], notes_segs: list[Segment], opt: Options,
+                   emit: Any, warnings: list[str]) -> None:
+    hop = c.hop or 0.01
+    if len(notes_segs) == 0:
+        raise NothingVoiced("no sustained notes detected")
+    m = hz_to_midi(c.f0, opt.a4_hz)
+    meds = [float(np.nanmedian(m[s.start:s.end])) for s in notes_segs]
+    durs = [s.dur(hop) for s in notes_segs]
+    order = [i for i, t in enumerate(targets) if not t.rest]
+    groups = _align(meds, durs, [targets[i].midi or 0 for i in order], opt.octave_agnostic)
+    for gi, ti in enumerate(order):
+        g = groups[gi]
+        if g:
+            emit(ti, targets[ti], notes_segs[g[0]].start, notes_segs[g[-1]].end)
+        else:
+            emit(ti, targets[ti], 0, 0)
+    if len(notes_segs) > len(order) * 2:
+        warnings.append(f"sang {len(notes_segs)} note segments for {len(order)} targets; "
+                        "alignment may be off")
+
+
 def analyze(c: Contour, targets: list[Target], opt: Options) -> dict[str, Any]:
     hop = c.hop or 0.01
     spans = voiced_spans(c)
+    tempo_ratio: float | None = None
     if not spans:
         raise NothingVoiced("no voiced audio detected")
     notes_segs = segment_notes(c, opt.a4_hz)
@@ -399,6 +452,10 @@ def analyze(c: Contour, targets: list[Target], opt: Options) -> dict[str, Any]:
             raise MetricsError("targets use 'beats' but tempo_bpm is missing")
         spb = 60.0 / opt.tempo_bpm
         t = t_first
+        # Singers drift from the written tempo (synthetic study, bench/glides.py: a rigid grid
+        # misreads correct glides by 35-70 c at +/-25% tempo). Fit one global tempo factor.
+        tempo_ratio = _fit_tempo(c, targets, spb, t_first, opt)
+        spb *= tempo_ratio
         for idx, tg in enumerate(targets):
             dur = (tg.beats if tg.beats is not None else 1.0) * spb
             if not tg.rest:
@@ -408,22 +465,7 @@ def analyze(c: Contour, targets: list[Target], opt: Options) -> dict[str, Any]:
         idx = next(i for i, t in enumerate(targets) if not t.rest)
         emit(idx, sung[0], spans[0].start, spans[-1].end)
     else:
-        if len(notes_segs) == 0:
-            raise NothingVoiced("no sustained notes detected")
-        m = hz_to_midi(c.f0, opt.a4_hz)
-        meds = [float(np.nanmedian(m[s.start:s.end])) for s in notes_segs]
-        durs = [s.dur(hop) for s in notes_segs]
-        order = [i for i, t in enumerate(targets) if not t.rest]
-        groups = _align(meds, durs, [targets[i].midi or 0 for i in order], opt.octave_agnostic)
-        for gi, ti in enumerate(order):
-            g = groups[gi]
-            if g:
-                emit(ti, targets[ti], notes_segs[g[0]].start, notes_segs[g[-1]].end)
-            else:
-                emit(ti, targets[ti], 0, 0)
-        if len(notes_segs) > len(order) * 2:
-            warnings.append(f"sang {len(notes_segs)} note segments for {len(order)} targets; "
-                            "alignment may be off")
+        _align_untimed(c, targets, notes_segs, opt, emit, warnings)
 
     graded = [n for n in notes if n.get("cents_error") is not None]
     all_stab = [n["stability_cents_sd"] for n in notes if n.get("stability_cents_sd") is not None]
@@ -433,6 +475,7 @@ def analyze(c: Contour, targets: list[Target], opt: Options) -> dict[str, Any]:
         "voiced_s": _r(voiced_s, 2),
         "range": _range(c, notes_segs, opt.a4_hz),
         "notes_targeted": len(sung),
+        "tempo_ratio": _r(tempo_ratio, 2),  # sung beat / written beat; >1 = slower; beats only
         "notes_passed": sum(1 for n in notes if n.get("pass")),
         "mean_abs_cents": _r(float(np.mean([abs(n["cents_error"]) for n in graded])))
         if graded else None,

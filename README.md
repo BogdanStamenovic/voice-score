@@ -30,6 +30,7 @@ Per note:
 | `raw_cents_sd` | SD of the raw pitch, vibrato and jitter included |
 | `drift_cents` | last third minus first third of the note (smoothed) |
 | `sustain_s` | longest stretch where the smoothed pitch stays within `pass_cents` of the target |
+| `landed_ratio` | `sustain_s` as a share of the note window: did the voice land on the note and stay (informational, see Glides) |
 | `onset_s` | time from the window start to the first voiced frame |
 | `octave_offset` | octaves between target and sung note; with `octave_agnostic` (default) the note is scored against the nearest octave |
 | `vibrato` | `rate_hz`, `extent_cents` (half peak-to-peak), `periodicity`, `present` (periodicity >= 0.5 and extent >= 15 c, rate searched in 3-9 Hz) |
@@ -40,7 +41,7 @@ untrained singer wobbling. Measured on a synthetic 5.5 Hz / 40 c vibrato with no
 raw SD 28 c, smoothed SD 6 c, vibrato reported as 5.49 Hz / 38 c. Vibrato is reported as
 vibrato, not penalised as instability.
 
-Summary: voiced seconds, range (2nd-98th percentile of the smoothed pitch inside detected
+Summary: voiced seconds, `tempo_ratio` (beats targets only), range (2nd-98th percentile of the smoothed pitch inside detected
 notes, so a single glitch frame does not set a record), notes passed, mean |cents error|,
 median stability, longest sustain, vibrato across notes.
 
@@ -51,7 +52,7 @@ How note windows are found:
 | none | notes segmented from the contour (pitch moves > 0.75 semitone for > 60 ms) |
 | one target, no times | the whole voiced span |
 | several targets, no times | segmented notes aligned to targets in order (monotonic DP; several segments may merge into one target; a skipped target is reported `missing`) |
-| `beats` + `tempo_bpm` | laid out from the first voiced onset; `{"rest": true, "beats": n}` advances time |
+| `beats` + `tempo_bpm` | laid out from the first voiced onset at the singer's own tempo: one global tempo factor (0.6-1.6x written) is fitted to the sung pitch and reported as `summary.tempo_ratio` (>1 = slower than written). `{"rest": true, "beats": n}` advances time |
 | `start`/`end` seconds | used as given |
 
 ## HTTP API
@@ -61,7 +62,7 @@ Agreed with the music-trainer builder on 2026-11-10; stable within 0.x unless bo
 `GET /health`
 
 ```json
-{"ok": true, "version": "0.1.0", "trackers": ["swiftf0", "rmvpe"], "default_tracker": "swiftf0"}
+{"ok": true, "version": "0.2.0", "trackers": ["swiftf0", "rmvpe"], "default_tracker": "swiftf0"}
 ```
 
 `POST /analyze`, multipart/form-data:
@@ -84,25 +85,26 @@ Agreed with the music-trainer builder on 2026-11-10; stable within 0.x unless bo
 Targets may also be bare strings (`"C4"`) or MIDI numbers (`60`). Notes: `C4` = MIDI 60;
 sharps `#`, flats `b`.
 
-Response for a synthetic C4-D4-E4 phrase sung 20 cents flat with a 5.5 Hz / 40 c vibrato
-(`targets` with beats, `tempo_bpm` 120, `contour` false; first note shown):
+Response for a synthetic C4-D4-E4 phrase sung 20 cents flat with a 5.5 Hz / 40 c vibrato and
+0.15 s breaths between notes, hence `tempo_ratio` 1.08 (`targets` with beats, `tempo_bpm` 120,
+`contour` false; first note shown):
 
 ```json
 {
-  "version": "0.1.0", "tracker": "swiftf0", "a4_hz": 440.0, "pass_cents": 50.0,
-  "octave_agnostic": true, "tempo_bpm": 120.0, "duration_s": 4.55, "hop_s": 0.016, "tracker_ms": 25.5,
-  "notes": [{"index": 0, "target_note": "C4", "target_midi": 60, "start": 0.304, "end": 1.296,
-             "voiced_ratio": 1.0, "onset_s": 0.0, "sung_note": "C4", "sung_hz": 257.73,
-             "cents_error": -25.9, "abs_cents_mean": 29.0, "within_50c": 0.768, "within_25c": 0.482,
-             "stability_cents_sd": 5.9, "raw_cents_sd": 27.7, "drift_cents": 3.6, "sustain_s": 0.99,
-             "octave_offset": 0,
-             "vibrato": {"present": true, "rate_hz": 5.49, "extent_cents": 36.6, "periodicity": 0.69},
+  "version": "0.2.0", "tracker": "swiftf0", "a4_hz": 440.0, "pass_cents": 50.0,
+  "octave_agnostic": true, "tempo_bpm": 120.0, "duration_s": 4.55, "hop_s": 0.016, "tracker_ms": 16.4,
+  "notes": [{"index": 0, "target_note": "C4", "target_midi": 60, "start": 0.304, "end": 1.376,
+             "voiced_ratio": 1.0, "onset_s": 0.0, "sung_note": "C4", "sung_hz": 257.72,
+             "cents_error": -26.0, "abs_cents_mean": 30.2, "within_50c": 0.754, "within_25c": 0.474,
+             "stability_cents_sd": 5.7, "raw_cents_sd": 29.0, "drift_cents": -1.2, "sustain_s": 1.01,
+             "landed_ratio": 0.94, "octave_offset": 0,
+             "vibrato": {"present": true, "rate_hz": 5.49, "extent_cents": 37.6, "periodicity": 0.7},
              "pass": true}],
   "summary": {"voiced_s": 3.5,
               "range": {"low_note": "C4", "high_note": "E4", "low_hz": 257.0, "high_hz": 327.2, "semitones": 4.2},
-              "notes_targeted": 3, "notes_passed": 3, "mean_abs_cents": 21.9, "stability_cents_sd": 5.9,
-              "longest_sustain_s": 1.2,
-              "vibrato": {"notes_with_vibrato": 3, "rate_hz": 5.49, "extent_cents": 38.3}},
+              "notes_targeted": 3, "tempo_ratio": 1.08, "notes_passed": 3, "mean_abs_cents": 23.2,
+              "stability_cents_sd": 5.8, "longest_sustain_s": 1.47,
+              "vibrato": {"notes_with_vibrato": 3, "rate_hz": 5.49, "extent_cents": 39.5}},
   "labels": {},
   "warnings": []
 }
@@ -126,7 +128,46 @@ published method measures that (survey 2026-11-10).
 
 `web/voice-score-lite.mjs` runs the same SwiftF0 model on onnxruntime-web with a port of the
 same metrics; the trainer vendors it from a pinned `web-v*` tag. Parity with this service is
-tested on 16 fixtures. See [web/README.md](web/README.md).
+tested on 20 fixtures. See [web/README.md](web/README.md).
+
+## Glides (V-006) and tempo drift
+
+music-trainer's V-006 sends slides between chord tones (1-5-1, 1-3-5-3-1, 5-1) as beat-timed
+phrases at 60 bpm with `pass_cents` 100 and passes the exercise at a mean note score of 0.6.
+`bench/glides.py` renders 594 sung takes of those phrases (glide 0.15-0.8 s, placed before,
+across or after the beat; singer's tempo 0.8-1.25x written; vibrato on/off; 25 dB SNR),
+tracks them with SwiftF0 and scores them with the trainer's own formula. Results in
+`bench/results/glides-*.md`, 2026-11-10.
+
+Estimate error = mean |reported cents_error - true sung error| on correct takes:
+
+| Phrase | rigid grid (0.1.0) | grid scaled to sung span | **tempo fit (0.2.0)** |
+|---|---:|---:|---:|
+| 1-5-1, tempo 0.8-1.25x | 35.2 c | 5.8 c | **5.0 c** |
+| 1-3-5-3-1, tempo 0.8-1.25x | 70.1 c | 7.4 c | **5.1 c** |
+| 5-1, tempo 0.8-1.25x | 8.0 c | 4.7 c | **4.2 c** |
+| 1-5-1, last note held 2x | 24.9 c | 135.0 c | **3.2 c** |
+| 1-3-5-3-1, last note held 2x | 89.8 c | 103.1 c | **3.6 c** |
+
+The rigid grid was the problem, not the glides: on tempo it misread correct takes by 5.7 c,
+at 0.8x by 69 c, at 1.25x by 84 c. Scaling the grid to the sung span broke on a held final
+note, which singers do all the time. Fitting one tempo factor to the pitch fixed both; a top
+note sung a whole tone flat is still reported as -200 c (estimate error 3-4 c), because the
+correctly sung notes pin the timing.
+
+Also tried and rejected: aligning segmented notes to targets ignoring beats (as good on
+correct takes, but misread a wrong note in 1-3-5-3-1 by 29 c) and excluding moving frames
+from each note's estimate (2 c better on synthetic glides, but on vocadito with annotated
+note windows it moved the median disagreement with the annotator from 5.0 to 5.2 c and notes
+off by more than 50 c from 25 to 31 of 1970).
+
+What voice-score cannot fix: under the lesson's current spec (tolerance 100, pass 0.6) a top
+note sung a whole tone flat passes 100% of the time, because one note at 200 c still scores
+0.5. That is a lesson-spec question for the trainer; `bench/results/glides-specs.md` has the
+pass rates under alternatives. A slow continuous slide that never settles is not reliably
+separable from a correct glide by any measure here: its median sits on the target and it
+spends about half of each window within 100 c (`landed_ratio` median 0.64 vs 0.94 for
+correct takes, but correct takes go down to 0.76).
 
 ## Install
 
