@@ -113,7 +113,10 @@ Response for a synthetic C4-D4-E4 phrase sung 20 cents flat with a 5.5 Hz / 40 c
 With `contour` true (the default) the response also carries
 `"contour": {"t": [...], "f0_hz": [... null where unvoiced], "confidence": [...]}`.
 
-`warnings` (human-readable, informational; nothing in the response depends on them):
+`warnings` (human-readable, informational; nothing in the response depends on them). The
+prefixes `low recording level` and `noisy recording` are a contract: music-trainer matches them to
+show the warning to the singer, and `tests/test_api.py` pins them. The rest of each message may
+change.
 
 | Warning | Fires when | Why that threshold |
 |---|---|---|

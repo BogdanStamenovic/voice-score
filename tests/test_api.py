@@ -106,3 +106,12 @@ def test_level_warnings(client: TestClient) -> None:
     assert warns(_take(0.003)) == ["low recording"]  # peaks at -50 dBFS, 10 dB above the gate
     assert warns(_take(0.3, noise_db=3)) == ["noisy recording:"]
     assert warns(_take(0.3, noise_db=20)) == []
+
+
+def test_warning_prefixes_are_stable(client: TestClient) -> None:
+    # music-trainer matches these two prefixes to show the warning to the singer (2026-11-12).
+    # Rewording the rest of the message is fine; changing the prefix breaks the app.
+    quiet = post(client, _take(0.003), {"targets": ["D3"]}).json()["warnings"]
+    noisy = post(client, _take(0.3, noise_db=3), {"targets": ["D3"]}).json()["warnings"]
+    assert any(w.startswith("low recording level") for w in quiet)
+    assert any(w.startswith("noisy recording") for w in noisy)
