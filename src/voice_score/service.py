@@ -63,7 +63,8 @@ def analyze_audio(audio: Audio, params: dict[str, Any]) -> dict[str, Any]:
         raise BadRequest(str(exc), status=422) from exc
     except MetricsError as exc:
         raise BadRequest(str(exc)) from exc
-    warnings = level_warnings(audio) + result.pop("warnings")
+    warnings = level_warnings(audio, contour.t, contour.voiced, contour.hop or 0.016) \
+        + result.pop("warnings")
     if unknown:
         warnings.append(f"ignored unknown params: {', '.join(sorted(unknown))}")
     resp: dict[str, Any] = {

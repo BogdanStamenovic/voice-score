@@ -59,6 +59,9 @@ for (const name of names) {
   const voicingAgree = agree / contour.t.length;
   if (voicingAgree < 0.999 || maxCents > 1) fail(`${name}: tracker voicing agreement ${voicingAgree.toFixed(4)}, max diff ${maxCents.toFixed(3)} c`);
   const full = await vs.analyze(pcm, p);
+  const lvl = (ws) => ws.filter((x) => /^(low recording|noisy recording|clipping)/.test(x)).map((x) => x.split(" ").slice(0, 2).join(" "));
+  if (JSON.stringify(lvl(full.warnings)) !== JSON.stringify(lvl(f.expected_service.warnings)))
+    fail(`${name}: level warnings js ${JSON.stringify(lvl(full.warnings))} != py ${JSON.stringify(lvl(f.expected_service.warnings))}`);
   const nPass = (r) => r.summary.notes_passed;
   if (nPass(full) !== nPass(f.expected_service)) fail(`${name}: end-to-end notes_passed js ${nPass(full)} != py ${nPass(f.expected_service)}`);
   console.log(`${failures === before ? "ok  " : "FAIL"} ${name.padEnd(22)} notes=${got.notes.length} voicing=${voicingAgree.toFixed(4)} maxdiff=${maxCents.toFixed(3)}c track=${full.tracker_ms}ms`);

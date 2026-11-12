@@ -3,7 +3,7 @@
 // Runs the same SwiftF0 ONNX model (135 KB, MIT, github.com/lars76/swift-f0) through
 // onnxruntime-web and computes the same metrics as voice_score/metrics.py, so a grade
 // computed here matches the server's for the same contour (checked by test/parity.mjs).
-// Port of voice_score 0.2.0; keep the two in lockstep (VERSION below).
+// Port of voice_score 0.2.1; keep the two in lockstep (VERSION below).
 //
 // The caller supplies onnxruntime (`import * as ort from "onnxruntime-web"`) so this file
 // has no dependencies and can be vendored as-is.
@@ -14,7 +14,7 @@
 //
 // `result` has the same shape as POST /analyze on the server, minus server-only fields.
 
-export const VERSION = "0.2.0";
+export const VERSION = "0.2.1";
 
 const SR = 16000;
 const HOP = 256;
@@ -652,7 +652,7 @@ export async function createAnalyzer({ ort, modelUrl, model, sessionOptions } = 
       version: VERSION, tracker: "swiftf0-web", a4_hz: opt.a4_hz, pass_cents: opt.pass_cents,
       octave_agnostic: opt.octave_agnostic, tempo_bpm: opt.tempo_bpm, duration_s: r(duration, 3),
       hop_s: r(contourHop(c.t), 5), tracker_ms: r(ms, 1), notes: res.notes, summary: res.summary,
-      labels: {}, warnings: [...levelWarnings(pcm16k), ...res.warnings],
+      labels: {}, warnings: [...levelWarnings(pcm16k, c), ...res.warnings],
     };
     if (params.contour ?? true)
       out.contour = { t: c.t.map((x) => r(x, 4)), f0_hz: c.f0.map((f) => (Number.isFinite(f) ? r(f, 2) : null)), confidence: c.confidence.map((x) => r(x, 3)) };
@@ -662,19 +662,42 @@ export async function createAnalyzer({ ort, modelUrl, model, sessionOptions } = 
   return { analyze, track, version: VERSION };
 }
 
-function levelWarnings(x) {
+// Mirrors audio.level_warnings: SwiftF0 gates frames peaking below -60 dBFS as silence, so
+// warn on the margin to that gate (median voiced frame peak < -45 dBFS) and on the voice's
+// level over the take's own background (< 6 dB), not on whole-file RMS.
+function levelWarnings(x, c) {
   const w = [];
   if (!x.length) return w;
   let clipped = 0;
-  let ss = 0;
-  for (const v of x) {
-    if (Math.abs(v) >= 0.999) clipped++;
-    ss += v * v;
-  }
+  for (const v of x) if (Math.abs(v) >= 0.999) clipped++;
   if (clipped / x.length > 0.001)
     w.push(`clipping: ${((100 * clipped) / x.length).toFixed(1)}% of samples at full scale; move back from the mic`);
-  const db = 20 * Math.log10(Math.max(Math.sqrt(ss / x.length), 1e-9));
-  if (db < -50) w.push(`very quiet recording (${db.toFixed(0)} dBFS RMS); pitch may be unreliable`);
+  if (!c) return w;
+  const voiced = c.f0.map(Number.isFinite);
+  if (!voiced.some(Boolean)) return w;
+  const peaks = [];
+  const vEnergy = [];
+  const uEnergy = [];
+  c.t.forEach((t, k) => {
+    const s = Math.min(Math.max(0, Math.floor(t * SR)), Math.max(0, x.length - 1));
+    const e = Math.min(x.length, s + HOP);
+    let pk = 0;
+    let ss = 0;
+    for (let i = s; i < e; i++) (pk = Math.max(pk, Math.abs(x[i]))), (ss += x[i] * x[i]);
+    const en = e > s ? ss / (e - s) : 0;
+    if (voiced[k]) peaks.push(pk), vEnergy.push(en);
+    else uEnergy.push(en);
+  });
+  const peakDb = 20 * Math.log10(Math.max(median(peaks), 1e-9));
+  if (peakDb < -45)
+    w.push(`low recording level (voice peaks at ${peakDb.toFixed(0)} dBFS); quieter singing may be missed: raise the mic gain or move closer`);
+  if (uEnergy.length >= 10) {
+    const noise = median(uEnergy);
+    if (noise > 0) {
+      const snr = 10 * Math.log10(Math.max(mean(vEnergy), 1e-20) / noise);
+      if (snr < 6) w.push(`noisy recording: voice only ${snr.toFixed(0)} dB above the background; pitch may be less reliable`);
+    }
+  }
   return w;
 }
 

@@ -62,7 +62,7 @@ Agreed with the music-trainer builder on 2026-11-10; stable within 0.x unless bo
 `GET /health`
 
 ```json
-{"ok": true, "version": "0.2.0", "trackers": ["swiftf0", "rmvpe"], "default_tracker": "swiftf0"}
+{"ok": true, "version": "0.2.1", "trackers": ["swiftf0", "rmvpe"], "default_tracker": "swiftf0"}
 ```
 
 `POST /analyze`, multipart/form-data:
@@ -112,6 +112,15 @@ Response for a synthetic C4-D4-E4 phrase sung 20 cents flat with a 5.5 Hz / 40 c
 
 With `contour` true (the default) the response also carries
 `"contour": {"t": [...], "f0_hz": [... null where unvoiced], "confidence": [...]}`.
+
+`warnings` (human-readable, informational; nothing in the response depends on them):
+
+| Warning | Fires when | Why that threshold |
+|---|---|---|
+| `clipping` | > 0.1% of samples at full scale | clipped peaks distort the harmonics |
+| `low recording level` | median peak of voiced 16 ms frames < -45 dBFS | SwiftF0 treats frames peaking below -60 dBFS as silence; on real takes, grades began shifting 10-15 dB above that gate |
+| `noisy recording` | voiced energy < 6 dB above the median unvoiced (background) energy | measured takes at 4-5 dB still tracked correctly, so this is a caution, not a failure |
+| `sung in a different octave` | `octave_agnostic` folded at least one note | so the trainer can tell the singer |
 
 | Status | When |
 |---|---|
@@ -168,6 +177,32 @@ pass rates under alternatives. A slow continuous slide that never settles is not
 separable from a correct glide by any measure here: its median sits on the target and it
 spends about half of each window within 100 c (`landed_ratio` median 0.64 vs 0.94 for
 correct takes, but correct takes go down to 0.76).
+
+## Validation on the trainer's user (2026-11-12)
+
+20 real takes recorded in music-trainer on 2026-11-11 (lessons V-001..V-005; an adult male
+voice whose lowest sung notes were around 77 Hz), analyzed in place and not kept. Checks:
+
+| Check | Result |
+|---|---|
+| SwiftF0 vs RMVPE / FCPE, frames ~an octave apart | 0 of 3979 / 0 of 4612 frames, incl. 351 frames below 100 Hz |
+| Sub-octave check against an f0 estimated from 200-1500 Hz harmonics only | 0.2% of 1198 frames below 130 Hz; 0 doubled |
+| Odd-harmonic energy at the reported f0 (a halved f0 would lack it) | present on every take; frames with strong energy at f0/2: 3 of 1678 |
+| Per-note cents, SwiftF0 vs RMVPE / FCPE | 18 graded notes: median difference 4.1 c, max 14.8 c |
+| Voicing: SwiftF0-only voiced time / time both others voiced but SwiftF0 not | 0.43 s / 0.08 s of 77.3 s; the 0.38 s on the quietest take shows real harmonics in the spectrogram |
+| Re-analysis vs the stored server result | identical on 20/20 |
+| Browser module vs server on the same 16 kHz audio | identical: max 0.00 c over 18 notes, same warnings |
+| Recording level vs SwiftF0's -60 dBFS silence gate | voiced frames peak at -37.5 dBFS (median), -46.4 (1st pct); turning the takes down shifted grades from -5 to -10 dB and gave "no voice detected" on 2/20 at -20 dB |
+
+What changed because of it (0.2.1): the old warning fired on whole-file RMS < -50 dBFS, so it
+flagged 4 takes that tracked perfectly (voice 22-24 dB over the background) and missed one
+whose voice was only 4 dB above it. Replaced by the level-margin and noise warnings above:
+on these takes it flags exactly the two noisy ones and, when the takes are turned down
+10-20 dB, every take whose grade shifted.
+
+Tried and rejected: peak-normalizing before tracking makes results level-invariant from -30
+to +20 dB, but 82% of the voiced frames it adds are not confirmed by RMVPE or FCPE and carry
+little harmonic structure (amplified background), and it moved one grade by 14 c.
 
 ## Install
 
@@ -299,6 +334,11 @@ bench/run-parallel.sh                        # ~20 min; pYIN and FCPE's 12-thres
 - **Metrics are a screen, not a verdict.** On real singing the default tracker's per-note
   error against human annotation has a median of ~3 cents but a long tail (frame-level P95
   ~23 cents); a 50-cent pass threshold absorbs this, a 10-cent one would not.
+- **Results depend on recording level near the bottom.** SwiftF0 drops frames whose peak is
+  below -60 dBFS. On real takes, grades started shifting when turned down 5-10 dB from a
+  typical laptop-mic level and "no voice detected" appeared at -20 dB. The service warns
+  (`low recording level`) but does not compensate; normalizing gain was tried and made
+  things worse (see Validation).
 - **No technique classification.** Chest/head/mix/belt are not detected. Published 10-class
   accuracy is ~66% (VocalSet) with no public weights; not worth grading on.
 - **Falsetto and distortion labels do not exist yet** (`labels` is empty).

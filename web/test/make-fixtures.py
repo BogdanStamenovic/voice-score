@@ -63,6 +63,14 @@ def cases() -> list[tuple[str, np.ndarray, dict]]:
                 {"targets": [{"midi": m, "beats": b} for m, b in
                              zip((55, 59, 62, 59, 55), (1.5, 1.5, 2, 1.5, 2))], "tempo_bpm": 60,
                  "pass_cents": 100}))
+    # level warnings: a quiet take (peaks -50 dBFS) and a noisy one (voice 3 dB over noise)
+    f = note_sequence([(50, 2.0)], lead_s=0.6, tail_s=0.6)
+    x = render(f, formants=False).audio.astype(np.float64)
+    out.append(("quiet_take", (x * 0.003 / np.abs(x).max()).astype(np.float32), {"targets": ["D3"]}))
+    x = x * 0.3 / np.abs(x).max()
+    v = np.abs(x) > 0
+    noisy = x + np.random.default_rng(0).standard_normal(len(x)) * np.sqrt(np.mean(x[v] ** 2) / 10 ** 0.3)
+    out.append(("noisy_take", noisy.astype(np.float32), {"targets": ["D3"]}))
     # real singing: first 12 s of three vocadito tracks, untargeted and with their notes
     import soxr
 

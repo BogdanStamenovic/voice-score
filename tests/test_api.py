@@ -81,3 +81,28 @@ def test_webm_via_ffmpeg(client: TestClient, a3_sharp: bytes, tmp_path) -> None:
                     str(dst)], check=True)
     d = post(client, dst.read_bytes(), {"targets": ["A3"]}).json()
     assert d["notes"][0]["cents_error"] == pytest.approx(30, abs=10)
+
+
+def _take(level: float, noise_db: float | None = None) -> bytes:
+    from voice_score.synth import note_sequence, render
+
+    f = note_sequence([(50, 2.0)], lead_s=0.6, tail_s=0.6)
+    x = render(f, formants=False).audio.astype(np.float64)
+    x *= level / np.abs(x).max()
+    if noise_db is not None:  # background noise noise_db below the voice, everywhere
+        rng = np.random.default_rng(0)
+        v = np.abs(x) > 0
+        x = x + rng.standard_normal(len(x)) * np.sqrt(np.mean(x[v] ** 2) / 10 ** (noise_db / 10))
+    return wav_bytes(x.astype(np.float32))
+
+
+def test_level_warnings(client: TestClient) -> None:
+    def warns(audio: bytes) -> list[str]:
+        r = post(client, audio, {"targets": ["D3"], "contour": False})
+        assert r.status_code == 200, r.text
+        return [w.split(" ")[0] + " " + w.split(" ")[1] for w in r.json()["warnings"]]
+
+    assert warns(_take(0.3)) == []
+    assert warns(_take(0.003)) == ["low recording"]  # peaks at -50 dBFS, 10 dB above the gate
+    assert warns(_take(0.3, noise_db=3)) == ["noisy recording:"]
+    assert warns(_take(0.3, noise_db=20)) == []
