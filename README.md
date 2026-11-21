@@ -30,6 +30,7 @@ Per note:
 | `raw_cents_sd` | SD of the raw pitch, vibrato and jitter included |
 | `drift_cents` | last third minus first third of the note (smoothed) |
 | `sustain_s` | longest stretch where the smoothed pitch stays within `pass_cents` of the target |
+| `held_s` | longest stretch where the smoothed pitch stays within `pass_cents` of the singer's **own** median: how long the note was held steady, whatever its accuracy (use this for "hold the note N seconds") |
 | `landed_ratio` | `sustain_s` as a share of the note window: did the voice land on the note and stay (informational, see Glides) |
 | `onset_s` | time from the window start to the first voiced frame |
 | `octave_offset` | octaves between target and sung note; with `octave_agnostic` (default) the note is scored against the nearest octave |
@@ -62,7 +63,7 @@ Agreed with the music-trainer builder on 2026-11-10; stable within 0.x unless bo
 `GET /health`
 
 ```json
-{"ok": true, "version": "0.2.1", "trackers": ["swiftf0", "rmvpe"], "default_tracker": "swiftf0"}
+{"ok": true, "version": "0.3.0", "trackers": ["swiftf0", "rmvpe"], "default_tracker": "swiftf0"}
 ```
 
 `POST /analyze`, multipart/form-data:
@@ -206,6 +207,29 @@ on these takes it flags exactly the two noisy ones and, when the takes are turne
 Tried and rejected: peak-normalizing before tracking makes results level-invariant from -30
 to +20 dB, but 82% of the voiced frames it adds are not confirmed by RMVPE or FCPE and carry
 little harmonic structure (amplified background), and it moved one grade by 14 c.
+
+## Validation 2: iPhone microphone, steady tones (2026-11-21)
+
+22 takes recorded on 2026-11-18 on an iPhone microphone (48 kHz Opus; the browser reported
+noise suppression and AGC as unknown, echo cancellation off), lessons V-006..V-008.
+Analyzed in place, not kept.
+
+| Check | Result |
+|---|---|
+| SwiftF0 vs RMVPE, frames an octave apart | 0 of 4682 |
+| SwiftF0 vs FCPE, frames an octave apart | 148 of 5213, all inside two creaky stretches where the voice itself is period-doubled (harmonic spacing ~55 Hz under a ~110 Hz tone); SwiftF0 and RMVPE report the 55 Hz period, FCPE the upper octave |
+| Frames where SwiftF0 reports twice the true f0 (strong energy at f0/2) | 0 of 1752 |
+| Hidden processing | background -57..-85 dBFS (lower than the laptop's), no digital-silence gating, level within +/-3 dB across held notes: no pumping AGC or gating visible |
+| The 4 takes graded 0 | all three trackers agree on the sung note (within 5 c): each was the first attempt at a new exercise sung on the previous exercise's pitch (C3 for A3 twice, A for G, G for C), corrected on later attempts |
+
+Defect found: `sustain_s` counts time within `pass_cents` of the target, so it mixes accuracy
+into duration. A synthetic steady 5.2 s hold scored by the trainer's V-008 rule (tolerance 50,
+5 s required) went from 0.81 at 46 c off to 0.22 at 54 c and 0.00 at 68 c, although the cents
+rule alone gives 0.96 and 0.82; with a 35 c vibrato at 52 c off it scored 0.14. Meanwhile a
+take wandering +/-40 c around the target passed (0.83). 0.3.0 adds `held_s` (steadiness
+around the sung pitch): the same takes score 1.00 / 0.96 / 0.82 / 0.98, and the wandering one
+fails (0.62). `sustain_s` keeps its meaning, since `landed_ratio` and glide grading use it.
+On the 12 real V-008 takes, switching changes scores (largest: 0.48 -> 0.65) but no pass/fail.
 
 ## Install
 

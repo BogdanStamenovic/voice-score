@@ -170,3 +170,22 @@ def test_glide_wrong_top_note_is_not_fitted_away() -> None:
     r = analyze(contour(f), parse_targets([{"midi": m, "beats": b} for m, b in zip(midis, beats)]),
                 Options(tempo_bpm=60, pass_cents=100))
     assert r["notes"][1]["cents_error"] == pytest.approx(-200, abs=10)
+
+
+@pytest.mark.parametrize("cents", [0, 55, 70, 90])
+def test_held_s_measures_steadiness_not_accuracy(cents: float) -> None:
+    # a perfectly steady 5 s hold: held_s is the full hold however far off the target it is
+    c = contour(np.concatenate([np.zeros(30), tone(43, 5.0, cents=cents), np.zeros(30)]))
+    n = analyze(c, parse_targets(["G2"]), Options(pass_cents=50))["notes"][0]
+    assert n["held_s"] == pytest.approx(5.0, abs=0.05)
+    if cents > 60:
+        assert n["sustain_s"] == 0.0  # near-target time: why held_s exists
+
+
+def test_held_s_penalises_wandering() -> None:
+    t = np.arange(500) / 100
+    wander = 150 * np.sin(2 * np.pi * 0.4 * t)  # slow +/-150 c drift around the target
+    f = 98.0 * 2 ** (wander / 1200)
+    n = analyze(contour(np.concatenate([np.zeros(30), f, np.zeros(30)])),
+                parse_targets(["G2"]), Options(pass_cents=50))["notes"][0]
+    assert n["held_s"] < 1.5

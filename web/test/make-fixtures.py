@@ -63,6 +63,10 @@ def cases() -> list[tuple[str, np.ndarray, dict]]:
                 {"targets": [{"midi": m, "beats": b} for m, b in
                              zip((55, 59, 62, 59, 55), (1.5, 1.5, 2, 1.5, 2))], "tempo_bpm": 60,
                  "pass_cents": 100}))
+    # V-008 steady tone held 5 s, 70 c sharp: held_s full, sustain_s ~0
+    f = note_sequence([(43, 5.2)], detune_cents=70, jitter_cents=6, seed=3)
+    out.append(("steady_sharp_hold", render(f, noise_snr_db=25, formants=False).audio,
+                {"targets": [{"midi": 43}], "pass_cents": 50}))
     # level warnings: a quiet take (peaks -50 dBFS) and a noisy one (voice 3 dB over noise)
     f = note_sequence([(50, 2.0)], lead_s=0.6, tail_s=0.6)
     x = render(f, formants=False).audio.astype(np.float64)

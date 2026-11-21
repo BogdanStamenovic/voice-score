@@ -267,7 +267,7 @@ def note_metrics(c: Contour, i0: int, i1: int, target_midi: float | None,
     if voiced.sum() * hop < 0.05:
         out.update({"sung_note": None, "cents_error": None, "abs_cents_mean": None,
                     "within_50c": None, "within_25c": None, "stability_cents_sd": None, "raw_cents_sd": None,
-                    "drift_cents": None, "sustain_s": 0.0, "landed_ratio": 0.0, "onset_s": None, "octave_offset": None,
+                    "drift_cents": None, "sustain_s": 0.0, "held_s": 0.0, "landed_ratio": 0.0, "onset_s": None, "octave_offset": None,
                     "vibrato": vibrato(np.array([]), hop), "pass": False if target_midi is not None else None,
                     "missing": True})
         return out
@@ -291,6 +291,11 @@ def note_metrics(c: Contour, i0: int, i1: int, target_midi: float | None,
     third = max(1, len(steady) // 3)
     in_tol = np.zeros_like(voiced)
     in_tol[voiced] = np.abs((sm_all[voiced] - ref) * 100.0) <= opt.pass_cents
+    # Steadiness: within pass_cents of the singer's OWN pitch. sustain_s (near the target)
+    # mixes accuracy into duration: a perfectly steady 5 s hold 68 c sharp had sustain_s 0 and
+    # scored 0 in the trainer although its cents rule gives 0.82 (bench, 2026-11-21).
+    in_hold = np.zeros_like(voiced)
+    in_hold[voiced] = np.abs((sm_all[voiced] - sung) * 100.0) <= opt.pass_cents
     err = float(np.median(cents))
     out.update({
         "sung_note": midi_to_note(sung),
@@ -304,6 +309,7 @@ def note_metrics(c: Contour, i0: int, i1: int, target_midi: float | None,
         "raw_cents_sd": _r(float(np.std(cents))),
         "drift_cents": _r(float((np.median(sm_steady[-third:]) - np.median(sm_steady[:third])) * 100)),
         "sustain_s": _r(_longest_run(in_tol, hop), 2),
+        "held_s": _r(_longest_run(in_hold, hop), 2),
         # longest in-tolerance stretch as a share of the note window: "did it land and stay"
         "landed_ratio": _r(_longest_run(in_tol, hop) / max((i1 - i0) * hop, hop), 3),
         "octave_offset": octave if target_midi is not None else None,

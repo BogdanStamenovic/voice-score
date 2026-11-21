@@ -3,7 +3,7 @@
 // Runs the same SwiftF0 ONNX model (135 KB, MIT, github.com/lars76/swift-f0) through
 // onnxruntime-web and computes the same metrics as voice_score/metrics.py, so a grade
 // computed here matches the server's for the same contour (checked by test/parity.mjs).
-// Port of voice_score 0.2.1; keep the two in lockstep (VERSION below).
+// Port of voice_score 0.3.0; keep the two in lockstep (VERSION below).
 //
 // The caller supplies onnxruntime (`import * as ort from "onnxruntime-web"`) so this file
 // has no dependencies and can be vendored as-is.
@@ -14,7 +14,7 @@
 //
 // `result` has the same shape as POST /analyze on the server, minus server-only fields.
 
-export const VERSION = "0.2.1";
+export const VERSION = "0.3.0";
 
 const SR = 16000;
 const HOP = 256;
@@ -358,7 +358,7 @@ function noteMetrics(c, i0, i1, targetMidi, opt) {
   if (nVoiced * hop < 0.05) {
     return Object.assign(out, {
       sung_note: null, cents_error: null, abs_cents_mean: null, within_50c: null, within_25c: null,
-      stability_cents_sd: null, raw_cents_sd: null, drift_cents: null, sustain_s: 0.0, landed_ratio: 0.0, onset_s: null,
+      stability_cents_sd: null, raw_cents_sd: null, drift_cents: null, sustain_s: 0.0, held_s: 0.0, landed_ratio: 0.0, onset_s: null,
       octave_offset: null, vibrato: vibrato([], hop), pass: targetMidi !== null ? false : null, missing: true,
     });
   }
@@ -381,6 +381,8 @@ function noteMetrics(c, i0, i1, targetMidi, opt) {
   const smSteady = (steadyIdx.length > 3 * half ? steadyIdx.slice(half) : steadyIdx).map((i) => smAll[i]);
   const third = Math.max(1, Math.floor(steady.length / 3));
   const inTol = voiced.map((v, i) => v && Math.abs((smAll[i] - ref) * 100) <= opt.pass_cents);
+  // steadiness around the singer's own pitch (mirrors metrics.py held_s)
+  const inHold = voiced.map((v, i) => v && Math.abs((smAll[i] - sung) * 100) <= opt.pass_cents);
   const err = median(cents);
   const hasT = targetMidi !== null;
   const absC = cents.map(Math.abs);
@@ -395,6 +397,7 @@ function noteMetrics(c, i0, i1, targetMidi, opt) {
     raw_cents_sd: r(std(cents)),
     drift_cents: r((median(smSteady.slice(-third)) - median(smSteady.slice(0, third))) * 100),
     sustain_s: r(longestRun(inTol, hop), 2),
+    held_s: r(longestRun(inHold, hop), 2),
     landed_ratio: r(longestRun(inTol, hop) / Math.max((i1 - i0) * hop, hop), 3),
     octave_offset: hasT ? octave : null,
     vibrato: vibrato(cents, hop),
